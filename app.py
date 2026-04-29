@@ -2,114 +2,124 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 
-# 设置网页标题和宽屏布局
-st.set_page_config(page_title="HxAim 弹道数据优化可视化", layout="wide")
+st.set_page_config(page_title="HxAim 亚帧级弹道提取系统", layout="wide")
 
-st.title("🔫 弹道数据综合优化与可视化工具")
-st.markdown("上传你在游戏中录制的多个 `hxaim_recoil.csv` 文件，系统将自动执行**时间轴对齐**与**中位数滤波**，生成最平滑的压枪数据。")
+st.title("🚀 亚帧级全量弹道解析引擎")
+st.markdown("上传 240Hz 高密度全量采集数据，系统将使用 **高斯平滑滤波 + 高精样条插值** 为您降维提取极其纯净的子弹级宏文件！")
 
-# 文件上传组件（支持多选）
-uploaded_files = st.file_uploader("请选择采集的 CSV 文件（可框选多个）", accept_multiple_files=True, type=['csv'])
+# 侧边栏参数控制
+with st.sidebar:
+    st.header("⚙️ 枪械核心参数")
+    target_rpm = st.number_input("枪械射速 (RPM)", min_value=100, max_value=2000, value=649, step=1)
+    num_bullets = st.number_input("需要提取的子弹数 (行数)", min_value=10, max_value=200, value=30, step=1)
+    
+    st.header("🎛️ 算法微调")
+    smooth_sigma = st.slider("高斯滤波强度 (Sigma)", min_value=1.0, max_value=50.0, value=8.0, step=0.5,
+                             help="值越大，曲线越平滑，但可能会丢失枪械极速变向时的尖锐细节。默认 8.0 通常最佳。")
+
+uploaded_files = st.file_uploader("拖入由 Recorder DLL 采集的高密度 CSV 文件", accept_multiple_files=True, type=['csv'])
 
 if uploaded_files:
     dfs = []
+    max_time_all = 0.0
+
     for f in uploaded_files:
-        # 读取无表头的 CSV
         df = pd.read_csv(f, header=None, names=["time_ms", "dx", "dy"])
-        dfs.append(df)
+        # 去除时间倒退的异常帧（极少发生，为了安全）
+        df = df[df['time_ms'].diff().fillna(1) > 0]
+        if not df.empty:
+            dfs.append(df)
+            max_time_all = max(max_time_all, df['time_ms'].max())
 
-    st.success(f"✅ 成功读取 {len(dfs)} 份弹道数据！")
-
-    # 确定最小行数，截断多余的空弹数据
-    lengths = [len(df) for df in dfs]
-    max_len = min(lengths)
-    
-    time_ms_avg = []
-    dx_avg = []
-    dy_avg = []
-
-    # 执行核心优化算法 (均值时间 + 中位数去噪坐标)
-    for i in range(max_len):
-        row_data = [df.iloc[i] for df in dfs]
-        times = [r['time_ms'] for r in row_data]
-        dxs = [r['dx'] for r in row_data]
-        dys = [r['dy'] for r in row_data]
+    if len(dfs) == 0:
+        st.error("没有解析到有效数据！")
+    else:
+        # 1. 建立全局高精度时间轴 (每 1ms 采样一个点)
+        master_time = np.arange(0, max_time_all + 1, 1.0)
         
-        time_ms_avg.append(np.mean(times))
-        dx_avg.append(np.median(dxs))
-        dy_avg.append(np.median(dys))
+        all_dx_interp = []
+        all_dy_interp = []
 
-    # 生成优化后的 DataFrame
-    optimized_df = pd.DataFrame({
-        "time_ms": time_ms_avg,
-        "dx": dx_avg,
-        "dy": dy_avg
-    })
+        # 2. 将所有高频采集的非标准时间轴，线性插值对齐到标准 1ms 时间轴上
+        for df in dfs:
+            f_x = interp1d(df['time_ms'], df['dx'], kind='linear', bounds_error=False, fill_value=(df['dx'].iloc[0], df['dx'].iloc[-1]))
+            f_y = interp1d(df['time_ms'], df['dy'], kind='linear', bounds_error=False, fill_value=(df['dy'].iloc[0], df['dy'].iloc[-1]))
+            all_dx_interp.append(f_x(master_time))
+            all_dy_interp.append(f_y(master_time))
 
-    # 保留小数位数
-    optimized_df['time_ms'] = optimized_df['time_ms'].round(2)
-    optimized_df['dx'] = optimized_df['dx'].round(1)
-    optimized_df['dy'] = optimized_df['dy'].round(1)
+        # 3. 跨次录制的特征融合：使用中位数，彻底消除单次录制时的画面噪点
+        master_dx = np.nanmedian(all_dx_interp, axis=0)
+        master_dy = np.nanmedian(all_dy_interp, axis=0)
 
-    # UI 布局：分左右两栏
-    col1, col2 = st.columns([1, 2.5])
+        # 4. 高斯平滑滤波：将毛刺曲线烫平成如丝般顺滑的物理阻尼轨迹
+        smoothed_dx = gaussian_filter1d(master_dx, sigma=smooth_sigma)
+        smoothed_dy = gaussian_filter1d(master_dy, sigma=smooth_sigma)
 
-    with col1:
-        st.subheader("📊 优化结果表")
-        st.info(f"数据有效行数自动截断为：**{max_len} 行**")
-        st.dataframe(optimized_df, height=500)
+        # 5. 计算子弹击发的理论绝对时间轴
+        interval_ms = 60000.0 / target_rpm
+        target_times = np.arange(0, num_bullets) * interval_ms
         
-        # 将 DataFrame 转换为 CSV 格式字节流，供下载
-        csv_bytes = optimized_df.to_csv(index=False, header=False).encode('utf-8')
-        st.download_button(
-            label="📥 一键下载 optimized_recoil.csv",
-            data=csv_bytes,
-            file_name='optimized_recoil.csv',
-            mime='text/csv',
-            use_container_width=True
-        )
-
-    with col2:
-        st.subheader("📈 弹道轨迹散点图")
-        fig = go.Figure()
+        # 6. 终极提取：从顺滑曲线上，精准切出子弹射出那一毫秒的坐标
+        f_smooth_x = interp1d(master_time, smoothed_dx, kind='linear', bounds_error=False, fill_value="extrapolate")
+        f_smooth_y = interp1d(master_time, smoothed_dy, kind='linear', bounds_error=False, fill_value="extrapolate")
         
-        # 1. 绘制所有原始数据（半透明浅色线，展示采集误差）
-        for idx, df in enumerate(dfs):
+        bullet_dx = f_smooth_x(target_times)
+        bullet_dy = f_smooth_y(target_times)
+
+        # 包装成 DataFrame
+        final_df = pd.DataFrame({
+            'time_ms': np.round(target_times, 2), 
+            'dx': np.round(bullet_dx, 1), 
+            'dy': np.round(bullet_dy, 1)
+        })
+
+        col1, col2 = st.columns([1.2, 3])
+
+        with col1:
+            st.success(f"✅ 提取成功！已结合 {len(dfs)} 份高频录制数据。")
+            st.dataframe(final_df, height=500)
+            
+            csv_bytes = final_df.to_csv(index=False, header=False).encode('utf-8')
+            st.download_button("📥 下载完美提取版 .csv", data=csv_bytes, file_name='optimized_recoil.csv', mime='text/csv', use_container_width=True)
+
+        with col2:
+            fig = go.Figure()
+            
+            # 绘制降采样后的高频轮廓 (为了性能和美观，图表上只画出采样密度)
             fig.add_trace(go.Scatter(
-                x=df['dx'][:max_len], y=df['dy'][:max_len],
-                mode='lines+markers',
-                line=dict(color='rgba(150, 150, 150, 0.3)', width=1),
-                marker=dict(size=4, opacity=0.3),
-                name=f'原始采集 {idx+1}',
+                x=smoothed_dx[::5], y=smoothed_dy[::5], # 每 5ms 画一个点
+                mode='lines',
+                line=dict(color='rgba(150, 150, 150, 0.4)', width=3),
+                name='高斯平滑底层轨迹',
                 hoverinfo='skip'
             ))
             
-        # 2. 绘制最终优化后的数据（红色高亮粗线）
-        fig.add_trace(go.Scatter(
-            x=optimized_df['dx'], y=optimized_df['dy'],
-            mode='lines+markers',
-            line=dict(color='red', width=4),
-            marker=dict(size=8, color='black', symbol='cross'),
-            name='🎯 最终优化平滑弹道',
-            hovertemplate="击发时间: %{customdata} ms<br>X轴偏移: %{x}<br>Y轴偏移: %{y}<extra></extra>",
-            customdata=optimized_df['time_ms']
-        ))
+            # 绘制最终切出的 30 发子弹红点
+            fig.add_trace(go.Scatter(
+                x=final_df['dx'], y=final_df['dy'],
+                mode='lines+markers',
+                line=dict(color='red', width=3),
+                marker=dict(size=10, color='white', line=dict(color='red', width=2), symbol='circle'),
+                name=f'🎯 降采样提取 ({target_rpm} RPM)',
+                hovertemplate="击发时间: %{customdata} ms<br>X偏移: %{x}<br>Y偏移: %{y}<extra></extra>",
+                customdata=final_df['time_ms']
+            ))
 
-        # 3. 设置图表样式 (将Y轴反转以符合游戏屏幕坐标系)
-        fig.update_layout(
-            xaxis_title="X 轴偏移 (像素)",
-            yaxis_title="Y 轴偏移 (屏幕向下为正，故反转显示更直观)",
-            yaxis=dict(autorange="reversed"), # 反转 Y 轴，更贴合压枪视觉
-            width=800,
-            height=600,
-            hovermode="closest",
-            plot_bgcolor='rgba(240, 240, 240, 0.8)'
-        )
-        # 标出屏幕中心十字准星原点 (0,0)
-        fig.add_shape(type="line", x0=-20, y0=0, x1=20, y1=0, line=dict(color="blue", width=1, dash="dash"))
-        fig.add_shape(type="line", x0=0, y0=-20, x1=0, y1=20, line=dict(color="blue", width=1, dash="dash"))
+            fig.update_layout(
+                xaxis_title="X 轴偏移 (像素)", yaxis_title="Y 轴偏移 (像素)",
+                yaxis=dict(autorange="reversed"), 
+                width=800, height=650, hovermode="closest",
+                plot_bgcolor='rgba(240, 240, 240, 0.8)',
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            )
+            
+            # 标出屏幕原点
+            fig.add_shape(type="line", x0=-20, y0=0, x1=20, y1=0, line=dict(color="blue", width=1, dash="dash"))
+            fig.add_shape(type="line", x0=0, y0=-20, x1=0, y1=20, line=dict(color="blue", width=1, dash="dash"))
 
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("👆 请在上方拖拽或点击上传你的 CSV 数据文件，上传后系统将立刻开始渲染。")
+    st.info("👆 请在左侧配置好枪械射速 (RPM)，然后将高频录制的文件拖拽到上方区域！")
