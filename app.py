@@ -80,7 +80,8 @@ if uploaded_files:
             st.success(f"✅ 提取完成！")
             st.dataframe(final_df, height=500)
             csv_bytes = final_df.to_csv(index=False, header=False).encode('utf-8')
-            st.download_button("📥 下载 .csv", data=csv_bytes, file_name='optimized_recoil.csv', mime='text/csv', use_container_width=True)
+            # ✨ 这里修改了导出的文件名，与 C++ 回放端一致
+            st.download_button("📥 下载 .csv", data=csv_bytes, file_name='hxaim_recoil.csv', mime='text/csv', use_container_width=True)
 
         with col2:
             fig = go.Figure()
