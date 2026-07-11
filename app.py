@@ -87,7 +87,7 @@ if uploaded_files:
             st.success(f"✅ 提取完成！共生成 {len(final_df)} 帧密集数据 ({target_hz}Hz)。")
             st.dataframe(final_df, height=500)
             csv_bytes = final_df.to_csv(index=False, header=False).encode('utf-8')
-            st.download_button("📥 下载 hxaim_recoil.csv", data=csv_bytes, file_name='hxaim_recoil.csv', mime='text/csv', use_container_width=True)
+            st.download_button("📥 下载 hxaim_recoil.csv", data=csv_bytes, file_name='hxaim_recoil.csv', mime='text/csv', width='stretch')
 
         with col2:
             fig = go.Figure()
