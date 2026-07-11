@@ -53,6 +53,12 @@ if uploaded_files:
         master_dx = np.nanmedian(all_dx_interp, axis=0)
         master_dy = np.nanmedian(all_dy_interp, axis=0)
 
+        safe_window = int(window_length)
+        if safe_window % 2 == 0:
+            safe_window += 1
+        if safe_window <= polyorder:
+            safe_window = polyorder + 2
+
         # 3. S-G 滤波平滑 (滤除视觉捕捉的抖动毛刺)
         smoothed_dx = savgol_filter(master_dx, window_length=window_length, polyorder=polyorder)
         smoothed_dy = savgol_filter(master_dy, window_length=window_length, polyorder=polyorder)
