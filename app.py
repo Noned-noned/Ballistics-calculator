@@ -83,7 +83,7 @@ if uploaded_files:
             st.dataframe(final_df, height=500)
             
             csv_bytes = final_df.to_csv(index=False, header=False).encode('utf-8')
-            st.download_button("📥 下载完美提取版 .csv", data=csv_bytes, file_name='optimized_recoil.csv', mime='text/csv', use_container_width=True)
+            st.download_button("📥 下载完美提取版 .csv", data=csv_bytes, file_name='hxaim_recoil.csv', mime='text/csv', use_container_width=True)
 
         with col2:
             fig = go.Figure()
